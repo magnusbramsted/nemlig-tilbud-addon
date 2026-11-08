@@ -1,8 +1,8 @@
 name: "Nemlig tilbudshenter"
-version: "0.3.0"
+version: "0.4.0"
 slug: "nemlig_tilbud"
-description: "Henter aktuelle tilbud fra Nemlig.com, matcher Mealie-opskrifter og gemmer separate oversigter over gratis, madspild og store rabatter."
-url: "https://github.com/local/nemlig_tilbud"
+description: "Prissætter dine Mealie-retter med Nemligs aktuelle priser (inkl. prismatch med REMA 1000) og samler tilbud, gratis, madspild og store rabatter."
+url: "https://github.com/magnusbramsted/nemlig-tilbud-addon"
 arch:
   - aarch64
 startup: services
@@ -12,13 +12,10 @@ map:
   - share:rw
 options:
   update_interval_hours: 24
-  enable_mealie_import: true
   mealie_api_token: ""
-  enable_new_nemlig_source: true
   high_discount_threshold_percent: 50
 schema:
   update_interval_hours: int(1,168)
-  enable_mealie_import: bool
   mealie_api_token: password
-  enable_new_nemlig_source: bool
   high_discount_threshold_percent: int(0,100)
+  mealie_url: url?
