@@ -190,3 +190,11 @@ def test_drained_weight_keeps_gross_size():
         "title": "Kidneybønner", "description": "400 g / 240 g / Taste of Nature", "price": 749,
         "pricePerUnit": {"value": 3121, "unitType": "Weight"}, "availability": {"type": "Available"}})
     assert can["package"]["g"] == 400
+
+
+def test_compact_line_for_dashboard():
+    ok = {"status": "ok", "food": "sukker", "need": "52 g", "product": "Sukker", "basket": 7.5,
+          "usage": 0.39, "packages": 1, "prismatch": True, "offer": None, "url": "x", "line": "52 g sukker"}
+    assert price_recipes.compact_line(ok) == {"food": "sukker", "need": "52 g", "product": "Sukker",
+                                              "basket": 7.5, "usage": 0.39, "prismatch": True}
+    assert price_recipes.compact_line({"status": "mangler", "food": "bladselleri"}) == {"food": "bladselleri", "missing": True}
