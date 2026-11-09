@@ -87,7 +87,7 @@
   "pitabrød": {"query": "pitabrød", "require": ["pita"], "exclude": ["chips", "krydder"], "g_per_piece": 70},
   "porre": {"query": "porrer", "require": ["porre"], "exclude": ["frost", "suppe", "tærte", "skiver"], "g_per_piece": 200},
   "purløg": {"query": "purløg", "require": ["purløg"], "exclude": ["tørret", "smøreost", "dressing", "dip", "creme", "ost"], "units": {"håndfulde": {"g": 10}}, "g_per_piece": 20, "categories": ["krydderurter"]},
-  "ris": {"query": "jasminris", "require_any": ["ris", "jasminris", "langkornet"], "exclude": ["kogt", "mel", "kiks", "grød", "risotto", "pudding", "mælk", "nudler", "crisp", "papir", "vin", "eddike", "risengød", "à la", "sushi", "basmati", "vilde", "mikro", "færdig", "bølger", "kager", "chips"], "density": 0.85},
+  "ris": {"query": "jasminris", "require_any": ["ris", "jasminris", "langkornet"], "exclude": ["kogt", "mel", "kiks", "grød", "risotto", "pudding", "mælk", "nudler", "crisp", "papir", "vin", "eddike", "à la", "sushi", "basmati", "vilde", "mikro", "færdig", "bølger", "kager", "chips"], "density": 0.85},
   "risottoris": {"query": "risottoris", "require_any": ["risotto", "arborio", "carnaroli"], "exclude": ["færdig", "svampe", "mix", "tomat", "ost"]},
   "romainesalat": {"query": "romaine", "require_any": ["romaine", "hjertesalat"], "exclude": ["mix", "blanding", "dressing"], "g_per_piece": 250},
   "rosin": {"query": "rosiner", "require": ["rosin"], "exclude": ["chokolade", "mix", "nødde", "brød", "müsli"], "density": 0.6},
