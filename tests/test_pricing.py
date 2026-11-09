@@ -75,11 +75,10 @@ def test_user_example_52g_sugar(sugar, catalog):
     """52 g sukker, når 1 kg koster 7,50 -> 0,39 kr. forbrug, 7,50 kr. i kurven."""
     entry = price_recipes.resolve_entry("sukker", catalog)
     need = {"dim": "g", "amount": 52}
-    product, _ = pricing.choose_product(sugar, entry, "g")
-    assert product["id"] == "908032"                   # billigst pr. kg, ikke perle/rør
-    result = pricing.price_need(need, product, entry)
-    assert result["basket"] == 7.5
-    assert result["usage"] == 0.39
+    basket_item, usage_item, _ = pricing.choose_products(sugar, entry, need)
+    assert basket_item["id"] == usage_item["id"] == "908032"   # ikke perle/rør/udsolgt
+    assert pricing.price_need(need, basket_item, entry)["basket"] == 7.5
+    assert pricing.usage_cost(need, usage_item, entry) == 0.39
 
 
 def test_mix_offer_buys_up_when_cheaper():
@@ -157,3 +156,37 @@ def test_catalog_is_valid_json_and_same_as_resolves(catalog):
     for key, entry in catalog.items():
         if "same_as" in entry:
             assert entry["same_as"].lower() in catalog, key
+
+
+def test_compound_words_and_basket_tolerance(catalog):
+    vinegar = price_recipes.resolve_entry("eddike", catalog)
+    assert pricing.product_matches({"name": "Lagereddike (klar)", "price": 6.5, "package": {"ml": 1000}}, vinegar)
+    garlic = price_recipes.resolve_entry("hvidløg", catalog)
+    assert not pricing.product_matches({"name": "Hvidløgsdressing", "price": 13, "package": {"ml": 400}}, garlic)
+
+    wine = price_recipes.resolve_entry("rødvin", catalog)
+    box = {"id": "box", "name": "Rosso", "description": "3 l box / rødvin", "price": 99.95,
+           "package": {"ml": 3000}, "category": "Vin-og-spiritus"}
+    bottle = {"id": "bottle", "name": "Pinot", "description": "0,75 l / rødvin", "price": 39.95,
+              "package": {"ml": 750}, "category": "Vin-og-spiritus"}
+    basket_item, usage_item, _ = pricing.choose_products([box, bottle], wine, {"dim": "ml", "amount": 100})
+    assert basket_item["id"] == "bottle"   # billigst at lægge i kurven
+    assert usage_item["id"] == "box"       # billigst pr. liter -> forbrugspris 3,33 kr.
+    assert pricing.usage_cost({"dim": "ml", "amount": 100}, usage_item, wine) == 3.33
+
+
+def test_multiple_queries_are_merged(catalog):
+    entry = {"query": ["a", "b"], "require": ["x"]}
+    catalog = dict(catalog, testvare=entry)
+    resolved = price_recipes.resolve_entry("testvare", catalog)
+    products = price_recipes.products_for(resolved, {"a": [{"id": 1}], "b": [{"id": 1}, {"id": 2}]})
+    assert [p["id"] for p in products] == [1, 2]
+    assert price_recipes.products_for(resolved, {}) is None
+
+
+def test_drained_weight_keeps_gross_size():
+    import nemlig_soeg
+    can = nemlig_soeg.normalise_product({
+        "title": "Kidneybønner", "description": "400 g / 240 g / Taste of Nature", "price": 749,
+        "pricePerUnit": {"value": 3121, "unitType": "Weight"}, "availability": {"type": "Available"}})
+    assert can["package"]["g"] == 400
