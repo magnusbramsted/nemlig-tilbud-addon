@@ -248,6 +248,19 @@ def collect_offers(page_content):
     return offers, list_count, scanned
 
 
+HIGH_DISCOUNT_EXCLUDED_CATEGORIES = {"Vin-og-spiritus"}
+
+
+def savings_kr(offer):
+    """Besparelse i kroner: Nemligs egen værdi, ellers normalpris minus tilbudspris."""
+    campaign = offer.get("campaign") or {}
+    if campaign.get("savings") is not None:
+        return campaign["savings"]
+    if offer.get("normal_price") is not None and campaign.get("price") is not None:
+        return round(offer["normal_price"] - campaign["price"], 2)
+    return 0
+
+
 def run(driver, threshold):
     """Hent tilbudssiden med en åben browser og skriv JSON-filerne."""
     try:
@@ -290,11 +303,16 @@ def run(driver, threshold):
     }
 
     gratis = [o for o in active if "gratis" in o["offer_types"]]
-    madspild = [o for o in active if "undgaa_madspild" in o["offer_types"]]
+    madspild = sorted(
+        (o for o in active if "undgaa_madspild" in o["offer_types"]),
+        key=savings_kr,
+        reverse=True,
+    )
     high = sorted(
         (
             o for o in active
             if "gratis" not in o["offer_types"]
+            and o.get("category") not in HIGH_DISCOUNT_EXCLUDED_CATEGORIES
             and o["campaign"]["discount_percent"] is not None
             and o["campaign"]["discount_percent"] >= threshold
         ),
