@@ -10,10 +10,11 @@ Hver kørsel (standard: én gang i døgnet):
 1. Henter alle opskrifter fra Mealie (mængder, enheder, portioner).
 2. Læser Nemligs tilbudsside og skriver `nemlig_tilbud.json`, `nemlig_gratis.json`,
    `nemlig_madspild.json` og `nemlig_store_rabatter.json` i `/share`.
-3. Søger hver fødevare op hos Nemlig, vælger den billigste passende vare pr. kg/l/stk.
-   og beregner for hver ret:
-   - **kurvpris**: hele pakninger, der skal i kurven
-   - **forbrugspris**: kun den mængde, retten bruger
+3. Søger hver fødevare op hos Nemlig og beregner for hver ret:
+   - **kurvpris**: den billigste måde at få nok i kurven, i hele pakninger
+     (1 dl rødvin = én flaske, ikke en 3 l papvin)
+   - **forbrugspris**: præcis den mængde, retten bruger, til den laveste kilo-/literpris
+     (52 g sukker, når 1 kg koster 7,50 = 0,39 kr.)
    - begge pr. portion
 
    Resultat: `/share/nemlig_retpriser.json` (oversigt, sorteret billigst først) og

@@ -115,9 +115,12 @@ def package_for(product, price):
     if dim and ppu and price:
         derived = price / ppu * (1000 if dim in ("g", "ml") else 1)
         stated = package.get(dim)
-        # Stol på kiloprisen, hvis beskrivelsen mangler eller afviger meget
-        # (fx '390 g / 230 g' for drænet vægt).
-        if not stated or abs(stated - derived) / derived > 0.15:
+        # '400 g / 240 g' er brutto/drænet vægt: behold bruttovægten, så
+        # '1 dåse' i opskriften svarer til én dåse.
+        two_weights = len(re.findall(r"\d\s*(?:kg|g)\b", str(product.get("description") or ""))) >= 2
+        # Ellers stol på kiloprisen, hvis beskrivelsen mangler eller afviger meget
+        # (fx '9 x 14 g', hvor kun 14 g står som tal med enhed).
+        if not stated or (not two_weights and abs(stated - derived) / derived > 0.15):
             package[dim] = round(derived, 1) if dim != "stk" else max(1, round(derived))
     return package
 
