@@ -293,6 +293,18 @@ def word_exact(term, text):
     return re.search(pattern, text) is not None
 
 
+def term_in(term, text):
+    """
+    Danske sammensætninger: 'eddike' skal findes i 'lagereddike' og
+    'dressing' i 'hvidløgsdressing'. Korte ord (under 4 tegn) matches kun
+    i starten af et ord, så 'is' ikke rammer 'frisk' og 'ost' ikke 'frost'.
+    """
+    term = term.lower()
+    if len(term) >= 4:
+        return term in text
+    return word_starts(term, text)
+
+
 # Kategorier, der aldrig er rå ingredienser, medmindre kataloget tillader dem.
 EXCLUDED_CATEGORY_KEYWORDS = [
     "chips", "slik", "snack", "faerdig", "pleje", "husholdning", "baby",
@@ -325,7 +337,7 @@ def product_matches(product, entry):
     require_all = [t.lower() for t in entry.get("require", [])]
     require_any = [t.lower() for t in entry.get("require_any", [])]
     exact = entry.get("exact", False)
-    matcher = word_exact if exact else word_starts
+    matcher = word_exact if exact else term_in
 
     if require_all and not all(matcher(t, haystack) for t in require_all):
         return False
@@ -335,7 +347,7 @@ def product_matches(product, entry):
     full_text = _normalise(" ".join(
         str(product.get(f) or "") for f in ("name", "description")
     ))
-    if any(word_starts(word, full_text) for word in entry.get("exclude", [])):
+    if any(term_in(word, full_text) for word in entry.get("exclude", [])):
         return False
 
     if not entry.get("allow_any_category"):
@@ -356,28 +368,50 @@ def product_matches(product, entry):
     return True
 
 
-def choose_product(products, entry, need_dim):
-    """Billigste matchende vare pr. g/ml/stk. Returnerer (vare, antal_kandidater)."""
-    locked = entry.get("product_id")
+def choose_products(products, entry, need):
+    """
+    Vælg varer til et behov. Returnerer (kurvvare, forbrugsvare, antal_kandidater).
+
+    kurvvare    : billigste måde at få nok (fx 0,75 l rødvin frem for 3 l papvin,
+                  når retten bruger 1 dl)
+    forbrugsvare: laveste pris pr. kg/l/stk. (det, mængden "egentlig" koster)
+    """
     candidates = [p for p in products if product_matches(p, entry)]
+    locked = entry.get("product_id")
     if locked:
         locked_items = [p for p in candidates if str(p.get("id")) == str(locked)]
         if locked_items:
-            return locked_items[0], len(candidates)
+            return locked_items[0], locked_items[0], len(candidates)
 
-    if need_dim == "pakning":
-        scored = [(float(p["price"]), p) for p in candidates]
-    else:
-        scored = []
-        for product in candidates:
-            value = unit_price(product, need_dim, entry)
-            if value is not None:
-                scored.append((value, product))
+    scored = []
+    for product in candidates:
+        priced = price_need(need, product, entry)
+        if not priced:
+            continue
+        if need["dim"] == "pakning":
+            per_unit = float(product["price"])
+        else:
+            per_unit = unit_price(product, need["dim"], entry)
+        scored.append((per_unit, priced["basket"], product))
 
     if not scored:
-        return None, len(candidates)
-    scored.sort(key=lambda item: item[0])
-    return scored[0][1], len(candidates)
+        return None, None, len(candidates)
+
+    cheapest_basket = min(scored, key=lambda s: (s[1], s[0]))[2]
+    cheapest_unit = min(scored, key=lambda s: (s[0], s[1]))[2]
+    return cheapest_basket, cheapest_unit, len(candidates)
+
+
+def usage_cost(need, product, food_entry):
+    """Præcis mængde x laveste opnåelige pris pr. enhed (inkl. mix-tilbud)."""
+    if need["dim"] == "pakning":
+        per_package = float(product["price"])
+        mix = product.get("mix") or None
+        if mix and mix.get("min_qty") and mix.get("total") is not None:
+            per_package = min(per_package, float(mix["total"]) / int(mix["min_qty"]))
+        return round(per_package * need["amount"], 2)
+    per_unit = unit_price(product, need["dim"], food_entry)
+    return None if per_unit is None else round(per_unit * need["amount"], 2)
 
 
 def format_amount(need):
