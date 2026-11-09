@@ -305,7 +305,7 @@ def run(driver, threshold):
     gratis = [o for o in active if "gratis" in o["offer_types"]]
     madspild = sorted(
         (o for o in active if "undgaa_madspild" in o["offer_types"]),
-        key=savings_kr,
+        key=lambda o: (o["campaign"]["discount_percent"] or 0, savings_kr(o)),
         reverse=True,
     )
     high = sorted(
