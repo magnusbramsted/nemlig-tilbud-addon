@@ -61,8 +61,28 @@ def resolve_entry(food, catalog):
         entry = dict(catalog[key])
         entry.setdefault("query", key)
         entry["_key"] = key
-        return entry
-    return {"query": key, "require": [key], "_key": key, "_auto": True}
+    else:
+        entry = {"query": key, "require": [key], "_key": key, "_auto": True}
+    # "query" kan være ét søgeord eller en liste; varerne fra alle lægges sammen.
+    queries = entry["query"] if isinstance(entry["query"], list) else [entry["query"]]
+    entry["_queries"] = [q for q in queries if q]
+    return entry
+
+
+def products_for(entry, products_by_query):
+    """Saml varer fra alle søgeord (uden dubletter). None, hvis alle søgninger fejlede."""
+    found, seen, any_ok = [], set(), False
+    for query in entry["_queries"]:
+        products = products_by_query.get(query)
+        if products is None:
+            continue
+        any_ok = True
+        for product in products:
+            key = product.get("id") or product.get("name")
+            if key not in seen:
+                seen.add(key)
+                found.append(product)
+    return found if any_ok else None
 
 
 # --- Varer ---------------------------------------------------------------------
@@ -129,11 +149,11 @@ def price_ingredient(ingredient, catalog, products_by_query):
     if need["dim"] == "ml" and entry.get("yield_ml_per_piece"):
         need = {"dim": "stk", "amount": need["amount"] / float(entry["yield_ml_per_piece"])}
 
-    products = products_by_query.get(entry["query"])
+    products = products_for(entry, products_by_query)
     if products is None:
         return {**base, "status": "mangler", "reason": "søgning fejlede", "need": pricing.format_amount(need)}
 
-    product, candidates = pricing.choose_product(products, entry, need["dim"])
+    product, usage_product, candidates = pricing.choose_products(products, entry, need)
     if not product:
         return {
             **base,
@@ -148,7 +168,11 @@ def price_ingredient(ingredient, catalog, products_by_query):
         return {**base, "status": "mangler", "reason": "kunne ikke omregne mængde",
                 "need": pricing.format_amount(need), "product": product.get("name")}
 
-    return {
+    usage = pricing.usage_cost(need, usage_product, entry)
+    if usage is None:
+        usage = priced["usage"]
+
+    line = {
         **base,
         "status": "ok",
         "need": pricing.format_amount(need),
@@ -159,12 +183,17 @@ def price_ingredient(ingredient, catalog, products_by_query):
         "prismatch": product.get("prismatch", False),
         "packages": priced["packages"],
         "basket": priced["basket"],
-        "usage": priced["usage"],
+        "usage": min(usage, priced["basket"]),
         "approx": bool(priced["approx"] or note or entry.get("_auto")),
         "auto_matched": bool(entry.get("_auto")),
         "alternatives": candidates - 1,
         "url": product.get("url"),
     }
+    if usage_product is not product:
+        # Forbrugsprisen er regnet på en anden (større) vare med lavere kilopris.
+        line["usage_product"] = usage_product.get("name")
+        line["usage_package"] = usage_product.get("description")
+    return line
 
 
 def price_recipe(recipe, catalog, products_by_query):
@@ -233,7 +262,7 @@ def collect_queries(recipes_data, catalog):
             entry = resolve_entry(food, catalog)
             if entry.get("pantry") or entry.get("ignore"):
                 continue
-            queries.add(entry["query"])
+            queries.update(entry["_queries"])
     return queries
 
 
