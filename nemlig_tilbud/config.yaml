@@ -1,5 +1,5 @@
 name: "Nemlig tilbudshenter"
-version: "0.4.1"
+version: "0.4.2"
 slug: "nemlig_tilbud"
 description: "Prissætter dine Mealie-retter med Nemligs aktuelle priser (inkl. prismatch med REMA 1000) og samler tilbud, gratis, madspild og store rabatter."
 url: "https://github.com/magnusbramsted/nemlig-tilbud-addon"

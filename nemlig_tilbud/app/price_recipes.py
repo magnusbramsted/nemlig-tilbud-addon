@@ -266,6 +266,26 @@ def collect_queries(recipes_data, catalog):
     return queries
 
 
+def compact_line(line):
+    """Kort udgave af en ingredienslinje til dashboardet (HA-attributter skal holdes små)."""
+    if line["status"] != "ok":
+        return {"food": line.get("food") or line.get("line"), "missing": True}
+    compact = {
+        "food": line["food"],
+        "need": line["need"],
+        "product": line["product"],
+        "basket": line["basket"],
+        "usage": line["usage"],
+    }
+    if line.get("packages", 1) > 1:
+        compact["packages"] = line["packages"]
+    if line.get("prismatch"):
+        compact["prismatch"] = True
+    if line.get("offer"):
+        compact["offer"] = line["offer"]
+    return compact
+
+
 def write_json(path, payload):
     tmp = Path(path).with_suffix(Path(path).suffix + ".tmp")
     tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -294,7 +314,11 @@ def run(driver, recipes_data):
         "recipe_count": len(recipes),
         "search_errors": len(errors),
         "cheapest": recipes[0]["name"] if recipes else None,
-        "recipes": [{k: v for k, v in r.items() if k != "ingredients"} for r in recipes],
+        "recipes": [
+            {**{k: v for k, v in r.items() if k != "ingredients"},
+             "lines": [compact_line(l) for l in r["ingredients"] if l["status"] in ("ok", "mangler")]}
+            for r in recipes
+        ],
     }
     details = {"updated_at": now, "search_errors": errors, "recipes": recipes}
 
