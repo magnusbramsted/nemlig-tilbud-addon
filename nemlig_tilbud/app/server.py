@@ -1,12 +1,14 @@
 """Lille HTTP-server til Home Assistant (kun på det interne hassio-netværk).
 
-POST /kurv      {"items": [{"id": "5039806", "qty": 2, "name": "..."}]}
-                Læg varer i Nemlig-kurven. Bestiller aldrig.
+POST /kurv      Læg de ikke-afkrydsede punkter fra todo.indkobsliste i Nemlig-kurven.
+                Valgfrit: {"items": [{"id": "5039806", "qty": 2, "name": "..."}]}
+                eller {"entity_id": "todo.anden_liste"}. Bestiller aldrig.
 POST /levering  Hent leveringstider nu.
 GET  /status    Seneste resultater.
 
+POST-kald svarer straks (202) og kører i baggrunden. Resultatet skrives til /share,
+og HA bedes opdatere sensor.nemlig_kurv / sensor.nemlig_levering, når det er klar.
 Leveringstiderne hentes også selv hvert DELIVERY_INTERVAL sekund.
-Resultater skrives til /share, hvor HA's command_line-sensorer læser dem.
 """
 
 import json
@@ -19,6 +21,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import browser
+import ha_api
 import nemlig_konto
 
 PORT = 8099
@@ -28,6 +31,9 @@ LEVERING_FILE = Path("/share/nemlig_levering.json")
 DELIVERY_INTERVAL = 3600
 DELIVERY_DAYS = 7
 MAX_BODY = 64 * 1024
+TODO_ENTITY = "todo.indkobsliste"
+KURV_SENSOR = "sensor.nemlig_kurv"
+LEVERING_SENSOR = "sensor.nemlig_levering"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -38,6 +44,8 @@ LOGGER = logging.getLogger("nemlig.server")
 
 # Én browser-session ad gangen (Chromium er tung på en Pi).
 _SESSION_LOCK = threading.Lock()
+_JOBS = {}  # navn -> kørende tråd
+_JOBS_LOCK = threading.Lock()
 
 
 def _now():
@@ -91,13 +99,28 @@ def refresh_delivery():
         payload.setdefault("updated_at", None)
         payload.setdefault("free_count", None)
     _write(LEVERING_FILE, payload)
+    ha_api.update_entity(LEVERING_SENSOR)
     return payload
 
 
-def send_to_basket(items):
-    started = time.monotonic()
-    count = len(items or [])
+def _read(path):
     try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def send_to_basket(items=None, entity_id=TODO_ENTITY):
+    started = time.monotonic()
+    _write(KURV_FILE, {**_read(KURV_FILE), "running": True, "started_at": _now()})
+    ha_api.update_entity(KURV_SENSOR)
+    count = 0
+    try:
+        if items is None:
+            items = nemlig_konto.items_from_todo(ha_api.todo_items(entity_id))
+        count = len(items)
+        if not items:
+            raise nemlig_konto.NemligError("Indkøbslisten har ingen ikke-afkrydsede varer.")
         result = _session(lambda d: nemlig_konto.add_items(d, items))
         payload = {"updated_at": _now(), "ok": not result["failed"], "error": None,
                    "requested": count, **result}
@@ -108,8 +131,22 @@ def send_to_basket(items):
         LOGGER.exception("Kurv fejlede.")
         payload = {"updated_at": _now(), "ok": False, "error": str(err), "requested": count,
                    "added": [], "already": [], "failed": [], "rejected": []}
+    payload["running"] = False
     _write(KURV_FILE, payload)
+    ha_api.update_entity(KURV_SENSOR)
     return payload
+
+
+def _start(name, target, *args):
+    """Start et job i baggrunden, medmindre det allerede kører."""
+    with _JOBS_LOCK:
+        job = _JOBS.get(name)
+        if job and job.is_alive():
+            return False
+        job = threading.Thread(target=target, args=args, daemon=True, name=name)
+        _JOBS[name] = job
+        job.start()
+        return True
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -141,12 +178,20 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path == "/kurv":
             items = data.get("items")
-            if not isinstance(items, list):
+            if items is not None and not isinstance(items, list):
                 self._reply(400, {"ok": False, "error": "items skal være en liste"})
                 return
-            self._reply(200, send_to_basket(items))
+            entity_id = str(data.get("entity_id") or TODO_ENTITY)
+            if not entity_id.startswith("todo."):
+                self._reply(400, {"ok": False, "error": "entity_id skal være en todo-liste"})
+                return
+            started = _start("kurv", send_to_basket, items, entity_id)
+            self._reply(202 if started else 409,
+                        {"ok": started, "started": started,
+                         "error": None if started else "Kører allerede"})
         elif self.path == "/levering":
-            self._reply(200, refresh_delivery())
+            started = _start("levering", refresh_delivery)
+            self._reply(202 if started else 409, {"ok": started, "started": started})
         else:
             self._reply(404, {"ok": False, "error": "ukendt sti"})
 
