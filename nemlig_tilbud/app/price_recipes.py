@@ -214,6 +214,7 @@ def price_ingredient(ingredient, catalog, products_by_query, totals=None):
         "alternatives": candidates - 1,
         "key": entry["_key"],
         "url": product.get("url"),
+        "id": product.get("id") or None,
     }
     # Bruges til at regne fælles pakker, når samme vare optræder på flere linjer
     # (i én ret her, og på tværs af ugens retter i madplanen).
@@ -223,7 +224,8 @@ def price_ingredient(ingredient, catalog, products_by_query, totals=None):
         line["qty"] = [round(need["amount"], 3), need["dim"], round(size, 3)]
     alt = None if entry.get("product_id") else pricing.larger_alternative(products, entry, need, product)
     if alt and alt[2]:
-        line["alt"] = [alt[0].get("name"), alt[1], round(alt[2], 3)]
+        # [navn, pris pr. pakke, størrelse, Nemlig-vare-id] (id bruges af "Send til Nemlig-kurv")
+        line["alt"] = [alt[0].get("name"), alt[1], round(alt[2], 3), alt[0].get("id") or None]
     if usage_product is not product:
         # Forbrugsprisen er regnet på en anden (større) vare med lavere kilopris.
         line["usage_product"] = usage_product.get("name")
@@ -340,6 +342,8 @@ def compact_line(line):
         "usage": line["usage"],
         "key": line.get("key"),
     }
+    if line.get("id"):
+        compact["id"] = line["id"]
     if line.get("packages", 1) > 1:
         compact["packages"] = line["packages"]
     if line.get("qty"):
