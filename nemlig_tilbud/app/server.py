@@ -34,6 +34,7 @@ MAX_BODY = 64 * 1024
 TODO_ENTITY = "todo.indkobsliste"
 KURV_SENSOR = "sensor.nemlig_kurv"
 LEVERING_SENSOR = "sensor.nemlig_levering"
+DEFAULT_PREFERRED = "man 16-18"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -65,6 +66,21 @@ def _write(path, payload):
     tmp.replace(path)
 
 
+def _preferred(options=None):
+    options = _options() if options is None else options
+    return nemlig_konto.parse_preferred(options.get("preferred_delivery", DEFAULT_PREFERRED))
+
+
+def _delivery_summary(driver, preferred):
+    hours = nemlig_konto.get_delivery_hours(driver, DELIVERY_DAYS + 1)
+    return nemlig_konto.summarise_delivery(hours, datetime.now().date(), preferred=preferred)
+
+
+def _write_delivery(summary):
+    _write(LEVERING_FILE, {"updated_at": _now(), "ok": True, "error": None, **summary})
+    ha_api.update_entity(LEVERING_SENSOR)
+
+
 def _session(work):
     """Åbn nemlig.com, log ind og kør work(driver)."""
     options = _options()
@@ -81,8 +97,7 @@ def _session(work):
 def refresh_delivery():
     started = time.monotonic()
     try:
-        hours = _session(lambda d: nemlig_konto.get_delivery_hours(d, DELIVERY_DAYS))
-        summary = nemlig_konto.summarise_delivery(hours, datetime.now().date())
+        summary = _session(lambda d: _delivery_summary(d, _preferred()))
         payload = {"updated_at": _now(), "ok": True, "error": None, **summary}
         LOGGER.info("Leveringstider: %s ledige, %s gratis (%.0f s).",
                     summary["slot_count"], summary["free_count"], time.monotonic() - started)
@@ -116,17 +131,26 @@ def send_to_basket(items=None, entity_id=TODO_ENTITY):
     ha_api.update_entity(KURV_SENSOR)
     count = 0
     try:
-        if items is None:
+        from_todo = items is None
+        if from_todo:
             items = nemlig_konto.items_from_todo(ha_api.todo_items(entity_id))
         count = len(items)
         if not items:
             raise nemlig_konto.NemligError("Indkøbslisten har ingen ikke-afkrydsede varer.")
-        result = _session(lambda d: nemlig_konto.add_items(d, items))
+        preferred = _preferred()
+        result, slot, summary = _session(lambda d: _fill_basket(d, items, preferred))
+        if summary:
+            _write_delivery(summary)
+        # Kryds det af, der ligger i kurven; fejlede og varer uden id bliver stående.
+        in_basket = {x["id"] for x in result["added"] + result["already"]}
+        uids = [i["uid"] for i in items if i.get("uid") and i.get("id") in in_basket] if from_todo else []
+        checked = ha_api.complete_todo(entity_id, uids) if uids else 0
         payload = {"updated_at": _now(), "ok": not result["failed"], "error": None,
-                   "requested": count, **result}
-        LOGGER.info("Kurv: %s lagt i, %s fandtes, %s fejlede, %s uden id (%.0f s).",
+                   "requested": count, "checked_off": checked, "slot": slot, **result}
+        LOGGER.info("Kurv: %s lagt i, %s fandtes, %s fejlede, %s uden id, %s krydset af, tid: %s (%.0f s).",
                     len(result["added"]), len(result["already"]), len(result["failed"]),
-                    len(result["rejected"]), time.monotonic() - started)
+                    len(result["rejected"]), checked, (slot or {}).get("status"),
+                    time.monotonic() - started)
     except Exception as err:  # noqa: BLE001
         LOGGER.exception("Kurv fejlede.")
         payload = {"updated_at": _now(), "ok": False, "error": str(err), "requested": count,
@@ -135,6 +159,31 @@ def send_to_basket(items=None, entity_id=TODO_ENTITY):
     _write(KURV_FILE, payload)
     ha_api.update_entity(KURV_SENSOR)
     return payload
+
+
+def _fill_basket(driver, items, preferred):
+    """Læg varer i kurven og reservér den foretrukne leveringstid, hvis den er ledig."""
+    result = nemlig_konto.add_items(driver, items)
+    if not preferred:
+        return result, None, None
+    try:
+        summary = _delivery_summary(driver, preferred)
+        pref = summary.get("preferred") or {}
+        if not pref.get("found"):
+            slot = {"status": "findes ikke", "date": pref.get("date")}
+        elif pref.get("selected"):
+            slot = {**pref, "status": "allerede valgt"}
+        elif not pref.get("available"):
+            slot = {**pref, "status": "ikke ledig"}
+        else:
+            nemlig_konto.select_slot(driver, pref["id"])
+            summary = _delivery_summary(driver, preferred)
+            now_pref = summary.get("preferred") or {}
+            slot = {**now_pref, "status": "valgt" if now_pref.get("selected") else "forsøgt (ikke bekræftet)"}
+        return result, slot, summary
+    except Exception as err:  # noqa: BLE001 - varerne ligger i kurven alligevel
+        LOGGER.exception("Leveringstid kunne ikke vælges.")
+        return result, {"status": "fejl", "error": str(err)}, None
 
 
 def _start(name, target, *args):

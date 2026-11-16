@@ -6,6 +6,7 @@ login-cookien (.ASPXAUTH) bliver i browseren:
 2. POST /webapi/login sætter cookien; derefter fornyes tokens
 3. /webapi/basket/GetBasket og /webapi/basket/AddToBasket (sætter antal)
 4. /webapi/v2/Delivery/GetDeliveryDays (ledige tider med pris og frist)
+5. /webapi/Delivery/TryUpdateDeliveryTime (reserverer en leveringstid i kurven)
 
 Programmet bestiller ALDRIG: der findes ingen ordre-, checkout- eller betalingskald her.
 """
@@ -102,6 +103,9 @@ const done = arguments[arguments.length - 1];
         if (!list.length || !start) break;
       }
       done({hours: days});
+    } else if (action === 'select') {
+      const res = await api('POST', '/webapi/Delivery/TryUpdateDeliveryTime?timeslotId=' + encodeURIComponent(payload.id));
+      done({result: res});
     } else {
       done({error: 'Ukendt handling: ' + action});
     }
@@ -174,6 +178,7 @@ def items_from_todo(todo):
         match = _NEMLIG_ID.search(str(entry.get("description") or ""))
         count = _COUNT.search(summary)
         items.append({
+            "uid": entry.get("uid"),
             "id": match.group(1) if match else "",
             "qty": int(count.group(1)) if count else 1,
             "name": _COUNT.sub("", summary) if count else summary,
@@ -228,6 +233,11 @@ def get_delivery_hours(driver, days=7):
     return _call(driver, "delivery", {"days": days})["hours"]
 
 
+def select_slot(driver, slot_id):
+    """Reservér en leveringstid i kurven (ingen bestilling)."""
+    return _call(driver, "select", {"id": str(slot_id)}).get("result")
+
+
 # --- Leveringstider (ren databehandling, testbar uden browser) -------------------
 
 KINDS = {0: "Personlig", 1: "Fleksibel"}
@@ -262,7 +272,10 @@ def parse_slot(hour):
         "price": price,
         "deadline": deadline,
         "available": hour.get("Availability") == 0,  # 1 frist overskredet, 2 udsolgt, 3 lukket
+        "availability": hour.get("Availability"),
         "kind": KINDS.get(hour.get("Type")),
+        "id": hour.get("Id"),
+        "selected": hour.get("IsSelected") is True,
     }
 
 
@@ -277,6 +290,47 @@ def _public(slot):
         "price": slot["price"],
         "deadline": _iso(slot["deadline"]),
         "kind": slot["kind"],
+    }
+
+
+WEEKDAYS = {"man": 0, "tir": 1, "ons": 2, "tor": 3, "fre": 4, "lør": 5, "lor": 5, "søn": 6, "son": 6}
+
+
+def parse_preferred(text):
+    """'man 16-18' -> (0, 16, 18). Tom tekst eller 'nej' -> None."""
+    match = re.match(r"^\s*([a-zæøå]{3})[a-zæøå]*\.?\s+(\d{1,2})\s*[-–]\s*(\d{1,2})\s*$", str(text or "").lower())
+    if not match or match.group(1) not in WEEKDAYS:
+        return None
+    start, end = int(match.group(2)), int(match.group(3))
+    return (WEEKDAYS[match.group(1)], start, end) if 0 <= start < end <= 24 else None
+
+
+def preferred_slot(slots, today, preferred):
+    """Den foretrukne tid på næste foretrukne ugedag efter i dag.
+
+    Flere tider med samme vindue (Personlig/Fleksibel): ledig før optaget, så gratis,
+    så billigst. Returnerer også optagne tider, så HA kan vise "udsolgt".
+    """
+    if not preferred:
+        return None
+    weekday, start, end = preferred
+    days_ahead = (weekday - today.weekday()) % 7 or 7
+    day = today + timedelta(days=days_ahead)
+    matches = [s for s in slots if s["start"].date() == day
+               and s["start"].hour == start and s["end"].hour == end and s["end"].date() == day]
+    if not matches:
+        return {"date": day.isoformat(), "found": False}
+    best = min(matches, key=lambda s: (not s["available"], s["price"] != 0, s["price"] or 0))
+    deadline = best["deadline"]
+    return {
+        **_public(best),
+        "date": day.isoformat(),
+        "found": True,
+        "id": best["id"],
+        "available": best["available"],
+        "selected": any(s["selected"] for s in matches),
+        # Med tidszone, så HA kan regne på fristen (containeren kører i HA's tidszone).
+        "deadline_ts": deadline.astimezone().isoformat(timespec="minutes") if deadline else None,
     }
 
 
@@ -295,12 +349,17 @@ def _free_days(free):
     } for day, slots in sorted(days.items())]
 
 
-def summarise_delivery(hours, today, max_free=12):
+def summarise_delivery(hours, today, max_free=12, preferred=None):
     """Gratis tider og seneste bestillingsfrist for levering senest i morgen.
 
     today: dansk dato (date). Returnerer et lille dict til HA.
     """
-    slots = [s for s in (parse_slot(h) for h in hours or []) if s and s["available"]]
+    every = [s for s in (parse_slot(h) for h in hours or []) if s]
+    counts = {}
+    for s in every:
+        counts[str(s["availability"])] = counts.get(str(s["availability"]), 0) + 1
+    chosen = next((s for s in every if s["selected"]), None)
+    slots = [s for s in every if s["available"]]
     slots.sort(key=lambda s: s["start"])
     free = [s for s in slots if s["price"] == 0]
     tomorrow = today + timedelta(days=1)
@@ -322,5 +381,8 @@ def summarise_delivery(hours, today, max_free=12):
         "deadline_tomorrow": latest_deadline(slots),
         "deadline_tomorrow_free": latest_deadline(free),
         "free_days": _free_days(free),
+        "preferred": preferred_slot(every, today, preferred),
+        "selected": _public(chosen) if chosen else None,
+        "availability_counts": counts,
         "free_slots": [_public(s) for s in free[:max_free]],
     }
