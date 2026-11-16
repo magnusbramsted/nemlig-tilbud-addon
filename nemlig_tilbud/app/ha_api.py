@@ -37,3 +37,16 @@ def update_entity(*entity_ids):
         _call("POST", "/services/homeassistant/update_entity", {"entity_id": list(entity_ids)})
     except Exception as err:  # noqa: BLE001
         LOGGER.warning("Kunne ikke opdatere %s i HA: %s", ", ".join(entity_ids), err)
+
+
+def complete_todo(entity_id, uids):
+    """Kryds punkter af på en todo-liste. Returnerer antal afkrydsede."""
+    done = 0
+    for uid in uids:
+        try:
+            _call("POST", "/services/todo/update_item",
+                  {"entity_id": entity_id, "item": uid, "status": "completed"})
+            done += 1
+        except Exception as err:  # noqa: BLE001
+            LOGGER.warning("Kunne ikke krydse %s af: %s", uid, err)
+    return done

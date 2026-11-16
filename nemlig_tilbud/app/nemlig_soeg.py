@@ -1,7 +1,9 @@
 """Varesøgning på den nye Nemlig-side via sidens eget søge-API.
 
 Kaldene køres som fetch() inde i den åbne nemlig.com-side (Cloudflare):
-1. /webapi/Token giver et anonymt adgangstoken (gyldigt ca. 5 min.)
+1. /webapi/Token giver et adgangstoken (gyldigt ca. 5 min.). Er browseren logget
+   ind (main.py logger ind før prisberegningen), er tokenet kontoens, så priser og
+   lager passer til jeres leveringszone. Fejler det, søges der anonymt.
 2. productbff/api/v2/web/search/products returnerer varer i samme format
    som tilbudssiden: priser i øre, pricePerUnit, campaignLines og
    labelHighlighted (PriceMatch = prismatch med REMA 1000).
@@ -28,7 +30,8 @@ const done = arguments[arguments.length - 1];
   try {
     const gateway = (window.scom && window.scom.nemligGatewayApiUrl) || fallbackGateway;
     const getToken = async () => {
-      const response = await fetch('/webapi/Token', {credentials: 'omit'});
+      const mode = window.__nlAnon ? 'omit' : 'include';
+      const response = await fetch('/webapi/Token', {credentials: mode});
       if (!response.ok) throw new Error('Token-kald fejlede: ' + response.status);
       window.__nlTok = (await response.json()).access_token;
       window.__nlTokAt = Date.now();
@@ -40,6 +43,10 @@ const done = arguments[arguments.length - 1];
     const get = () => fetch(url, {credentials: 'omit', headers: {Authorization: 'Bearer ' + window.__nlTok}});
     let response = await get();
     if (response.status === 401) { await getToken(); response = await get(); }
+    if (!response.ok && !window.__nlAnon) {
+      // Kontoens token virker ikke her: søg anonymt resten af kørslen.
+      window.__nlAnon = true; await getToken(); response = await get();
+    }
     if (!response.ok) { done({error: 'HTTP ' + response.status}); return; }
 
     const data = await response.json();

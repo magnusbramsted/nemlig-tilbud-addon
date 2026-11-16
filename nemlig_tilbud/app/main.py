@@ -7,6 +7,7 @@ from pathlib import Path
 
 import browser
 import mealie_import
+import nemlig_konto
 import nemlig_tilbudsside
 import price_recipes
 
@@ -56,6 +57,16 @@ def load_recipes(options):
     return None
 
 
+def login(driver, options):
+    """Log ind før prisberegningen, så søgningen bruger kontoens priser og lager."""
+    if not (options.get("nemlig_email") and options.get("nemlig_password")):
+        LOGGER.info("Ingen Nemlig-login i indstillingerne. Søger anonymt.")
+        return
+    if "nemlig.com" not in (driver.current_url or ""):
+        browser.open_nemlig(driver)
+    nemlig_konto.login(driver, options["nemlig_email"], options["nemlig_password"])
+
+
 def main():
     options = load_options()
     threshold = float(options.get("high_discount_threshold_percent", 50))
@@ -65,6 +76,7 @@ def main():
     try:
         step("Tilbudssiden", lambda: nemlig_tilbudsside.run(driver, threshold))
         if recipes_data and recipes_data.get("recipes"):
+            step("Login", lambda: login(driver, options))
             step("Prisberegning", lambda: price_recipes.run(driver, recipes_data))
         else:
             LOGGER.warning("Ingen opskrifter fra Mealie. Springer prisberegning over.")
