@@ -161,6 +161,16 @@ def send_to_basket(items=None, entity_id=TODO_ENTITY):
     return payload
 
 
+def _basket_shows(driver, pref):
+    """Står den foretrukne tid i kurvens leveringstekst (fx 'man. 23/11 kl. 16-18')?
+
+    Nemlig markerer ikke altid den valgte tid i GetDeliveryDays, så kurven er facit.
+    """
+    text = str(nemlig_konto.get_basket(driver).get("delivery") or "")
+    start, end = datetime.fromisoformat(pref["start"]), datetime.fromisoformat(pref["end"])
+    return f"{start.day}/{start.month}" in text and f"{start.hour}-{end.hour}" in text, text
+
+
 def _fill_basket(driver, items, preferred):
     """Læg varer i kurven og reservér den foretrukne leveringstid, hvis den er ledig."""
     result = nemlig_konto.add_items(driver, items)
@@ -171,15 +181,17 @@ def _fill_basket(driver, items, preferred):
         pref = summary.get("preferred") or {}
         if not pref.get("found"):
             slot = {"status": "findes ikke", "date": pref.get("date")}
-        elif pref.get("selected"):
-            slot = {**pref, "status": "allerede valgt"}
-        elif not pref.get("available"):
-            slot = {**pref, "status": "ikke ledig"}
         else:
-            nemlig_konto.select_slot(driver, pref["id"])
-            summary = _delivery_summary(driver, preferred)
-            now_pref = summary.get("preferred") or {}
-            slot = {**now_pref, "status": "valgt" if now_pref.get("selected") else "forsøgt (ikke bekræftet)"}
+            shown, text = _basket_shows(driver, pref)
+            if pref.get("selected") or shown:
+                slot = {**pref, "status": "allerede valgt", "basket_delivery": text}
+            elif not pref.get("available"):
+                slot = {**pref, "status": "ikke ledig", "basket_delivery": text}
+            else:
+                nemlig_konto.select_slot(driver, pref["id"])
+                shown, text = _basket_shows(driver, pref)
+                status = "valgt" if shown else "forsøgt (ikke bekræftet)"
+                slot = {**pref, "status": status, "basket_delivery": text}
         return result, slot, summary
     except Exception as err:  # noqa: BLE001 - varerne ligger i kurven alligevel
         LOGGER.exception("Leveringstid kunne ikke vælges.")
