@@ -189,11 +189,33 @@ def price_ingredient(ingredient, catalog, products_by_query):
         "alternatives": candidates - 1,
         "url": product.get("url"),
     }
+    # Bruges til at regne fælles pakker, når samme vare optræder på flere linjer
+    # (i én ret her, og på tværs af ugens retter i madplanen).
+    line["_reprice"] = (need, product, entry)
+    size = 1.0 if need["dim"] == "pakning" else pricing.package_size_in(product, need["dim"], entry)[0]
+    if size:
+        line["qty"] = [round(need["amount"], 3), need["dim"], round(size, 3)]
     if usage_product is not product:
         # Forbrugsprisen er regnet på en anden (større) vare med lavere kilopris.
         line["usage_product"] = usage_product.get("name")
         line["usage_package"] = usage_product.get("description")
     return line
+
+
+def combined_basket(group):
+    """Kurvpris for flere linjer med samme vare: samlet mængde i hele pakker."""
+    needs = [l.get("_reprice") for l in group]
+    if all(needs) and len({n[0]["dim"] for n in needs}) == 1:
+        need, product, entry = needs[0]
+        total = {"dim": need["dim"], "amount": sum(n[0]["amount"] for n in needs)}
+        priced = pricing.price_need(total, product, entry)
+        if priced:
+            return {"basket": priced["basket"], "packages": priced["packages"]}
+    # Forskellige enheder: køb det, hver linje kræver for sig (sikker side).
+    first = group[0]
+    per_package = first["basket"] / first["packages"]
+    packages = sum(l["packages"] for l in group)
+    return {"basket": round(packages * per_package, 2), "packages": packages}
 
 
 def price_recipe(recipe, catalog, products_by_query):
@@ -204,20 +226,26 @@ def price_recipe(recipe, catalog, products_by_query):
 
     ok = [l for l in lines if l["status"] == "ok"]
 
-    # Kurvpris: samme vare på flere linjer (fx 2 x løg) lægges sammen
-    # som én vare, så vi ikke køber to pakker, hvis én er nok.
+    # Kurvpris: samme vare på flere linjer (fx 25 g + 15 g parmesan) købes som én
+    # samlet mængde. Antal pakker regnes ud fra de samlede mængder og pakkestørrelsen,
+    # ikke ud fra forbrugsprisen (den kan være regnet på en anden, billigere vare).
     basket_total = 0.0
     by_product = {}
     for line in ok:
         by_product.setdefault(line["url"] or line["product"], []).append(line)
     for group in by_product.values():
-        if len(group) == 1:
-            basket_total += group[0]["basket"]
-            continue
-        usage = sum(l["usage"] for l in group)
-        per_package = group[0]["basket"] / group[0]["packages"]
-        packages = max(1, math.ceil(round(usage / per_package, 6)))
-        basket_total += min(sum(l["basket"] for l in group), packages * per_package)
+        if len(group) > 1:
+            group_basket = combined_basket(group)
+            group[0]["basket"] = group_basket["basket"]
+            group[0]["packages"] = group_basket["packages"]
+            group[0]["shared_lines"] = len(group)
+            for extra in group[1:]:
+                extra["basket"] = 0.0
+                extra["usage"] = min(extra["usage"], group_basket["basket"])
+                extra["same_package"] = True
+        basket_total += sum(l["basket"] for l in group)
+    for line in lines:
+        line.pop("_reprice", None)
 
     usage_total = sum(l["usage"] for l in ok)
     servings = recipe.get("servings")
@@ -246,9 +274,9 @@ def price_recipe(recipe, catalog, products_by_query):
 
 def compute(recipes_data, catalog, products_by_query):
     priced = [price_recipe(r, catalog, products_by_query) for r in recipes_data.get("recipes", [])]
-    # Billigst først pr. portion; retter med manglende varer nederst,
+    # Laveste forbrugspris pr. portion først; retter med manglende varer nederst,
     # da deres pris ellers ser for lav ud.
-    priced.sort(key=lambda r: (bool(r["missing"]), r["basket_per_portion"]))
+    priced.sort(key=lambda r: (bool(r["missing"]), r["usage_per_portion"]))
     return priced
 
 
@@ -279,6 +307,12 @@ def compact_line(line):
     }
     if line.get("packages", 1) > 1:
         compact["packages"] = line["packages"]
+    if line.get("qty"):
+        compact["qty"] = line["qty"]
+    if line.get("same_package"):
+        compact["same_package"] = True
+    if line.get("shared_lines"):
+        compact["shared_lines"] = line["shared_lines"]
     if line.get("prismatch"):
         compact["prismatch"] = True
     if line.get("offer"):
@@ -328,7 +362,7 @@ def run(driver, recipes_data):
     LOGGER.info("Prissatte %s retter ud fra %s søgninger.", len(recipes), len(products_by_query))
     if recipes:
         top = recipes[0]
-        LOGGER.info("Billigst: %s — %.2f kr./portion (kurv).", top["name"], top["basket_per_portion"])
+        LOGGER.info("Billigst: %s — %.2f kr./portion (forbrug).", top["name"], top["usage_per_portion"])
     if errors and len(errors) == len(queries):
         raise RuntimeError("Alle søgninger hos Nemlig fejlede.")
     return summary
