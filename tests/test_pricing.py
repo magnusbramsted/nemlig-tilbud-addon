@@ -196,5 +196,53 @@ def test_compact_line_for_dashboard():
     ok = {"status": "ok", "food": "sukker", "need": "52 g", "product": "Sukker", "basket": 7.5,
           "usage": 0.39, "packages": 1, "prismatch": True, "offer": None, "url": "x", "line": "52 g sukker"}
     assert price_recipes.compact_line(ok) == {"food": "sukker", "need": "52 g", "product": "Sukker",
-                                              "basket": 7.5, "usage": 0.39, "prismatch": True}
+                                              "basket": 7.5, "usage": 0.39, "key": None, "prismatch": True}
     assert price_recipes.compact_line({"status": "mangler", "food": "bladselleri"}) == {"food": "bladselleri", "missing": True}
+
+
+
+def test_same_product_on_two_lines_is_bought_as_one_amount(sugar, catalog):
+    def recipe(a, b):
+        return {"name": "T", "servings": 1, "main_ingredients": [
+            {"mealie_food_name": "sukker", "quantity": a, "unit": "gram", "name": f"{a} g sukker"},
+            {"mealie_food_name": "sukker", "quantity": b, "unit": "gram", "name": f"{b} g sukker"},
+        ]}
+    small = price_recipes.price_recipe(recipe(300, 300), catalog, {"sukker": sugar})
+    ok = [l for l in small["ingredients"] if l["status"] == "ok"]
+    assert small["basket_total"] == 7.5
+    assert ok[1]["same_package"] and ok[1]["basket"] == 0.0
+    assert all("_reprice" not in l for l in small["ingredients"])
+    # 600 g + 600 g = 1,2 kg kan ikke være i én pakke på 1 kg
+    big = price_recipes.price_recipe(recipe(600, 600), catalog, {"sukker": sugar})
+    assert big["basket_total"] > 7.5
+    assert big["basket_total"] == sum(l["basket"] for l in big["ingredients"] if l["status"] == "ok")
+
+
+PARMESAN_RAW = [
+    {"id": "p50", "title": "Parmesan øko.", "description": "50 g", "price": 2295,
+     "pricePerUnit": {"value": 45900, "unitType": "Weight"}, "availability": {"type": "Available"},
+     "url": "parmesan-50", "tracking": {"item_category": "Ost"}},
+    {"id": "p150", "title": "Parmesan Reggiano", "description": "150 g", "price": 5000,
+     "pricePerUnit": {"value": 33333, "unitType": "Weight"}, "availability": {"type": "Available"},
+     "url": "parmesan-150", "tracking": {"item_category": "Ost"}},
+]
+
+
+def test_larger_package_wins_when_slightly_dearer_and_much_cheaper_per_kg(catalog):
+    import nemlig_soeg
+    products = {"parmesan": [nemlig_soeg.normalise_product(p) for p in PARMESAN_RAW]}
+    cat = dict(catalog, parmesan={"query": "parmesan", "require": ["parmesan"]})
+
+    def recipe(*grams):
+        return {"name": "T", "servings": 1, "main_ingredients": [
+            {"mealie_food_name": "parmesan", "quantity": g, "unit": "gram", "name": f"{g} g parmesan"} for g in grams]}
+
+    # 25 + 15 g: én lille pakke er nok (150 g ville koste over dobbelt så meget)
+    small = price_recipes.price_recipe(recipe(25, 15), cat, products)
+    assert small["basket_total"] == 22.95
+    # 50 + 50 g: 2 x 50 g = 45,90 mod 150 g = 50,00 -> den store pakke vælges
+    big = price_recipes.price_recipe(recipe(50, 50), cat, products)
+    ok = [l for l in big["ingredients"] if l["status"] == "ok"]
+    assert big["basket_total"] == 50.0
+    assert ok[0]["product"] == "Parmesan Reggiano" and ok[0]["packages"] == 1
+    assert ok[0]["key"] == "parmesan" and ok[1]["same_package"]

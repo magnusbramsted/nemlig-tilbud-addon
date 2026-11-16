@@ -368,6 +368,12 @@ def product_matches(product, entry):
     return True
 
 
+# En større pakke vælges, hvis den koster højst 25 % mere end den billigste måde
+# at få nok på, og prisen pr. kg/l/stk. er mindst 20 % lavere.
+UPSIZE_MAX_EXTRA_COST = 0.25
+UPSIZE_MIN_UNIT_SAVING = 0.20
+
+
 def choose_products(products, entry, need):
     """
     Vælg varer til et behov. Returnerer (kurvvare, forbrugsvare, antal_kandidater).
@@ -383,6 +389,30 @@ def choose_products(products, entry, need):
         if locked_items:
             return locked_items[0], locked_items[0], len(candidates)
 
+    scored = _score(candidates, entry, need)
+    if not scored:
+        return None, None, len(candidates)
+
+    base_unit, base_basket, basket_product, base_packages = min(scored, key=lambda s: (s[1], s[0]))
+    cheapest_unit = min(scored, key=lambda s: (s[0], s[1]))[2]
+
+    # Større pakke i stedet for flere små: betal lidt mere for en klart lavere pris
+    # pr. kg/l/stk. (fx 150 g parmesan til 50 kr. frem for 2 x 50 g til 45,90 kr.).
+    # Gælder kun, når der ellers skulle købes flere pakker - én pakke byttes ikke
+    # til en større, da resten så bare er spild (det afgør madplanen for hele ugen).
+    if need["dim"] != "pakning" and base_unit and base_packages >= 2:
+        best_unit = base_unit
+        for per_unit, basket, product, _packages in scored:
+            if per_unit is None:
+                continue
+            if (basket <= base_basket * (1 + UPSIZE_MAX_EXTRA_COST)
+                    and per_unit <= base_unit * (1 - UPSIZE_MIN_UNIT_SAVING)
+                    and per_unit < best_unit):
+                best_unit, basket_product = per_unit, product
+    return basket_product, cheapest_unit, len(candidates)
+
+
+def _score(candidates, entry, need):
     scored = []
     for product in candidates:
         priced = price_need(need, product, entry)
@@ -392,14 +422,35 @@ def choose_products(products, entry, need):
             per_unit = float(product["price"])
         else:
             per_unit = unit_price(product, need["dim"], entry)
-        scored.append((per_unit, priced["basket"], product))
+        scored.append((per_unit, priced["basket"], product, priced["packages"]))
+    return scored
 
-    if not scored:
-        return None, None, len(candidates)
 
-    cheapest_basket = min(scored, key=lambda s: (s[1], s[0]))[2]
-    cheapest_unit = min(scored, key=lambda s: (s[0], s[1]))[2]
-    return cheapest_basket, cheapest_unit, len(candidates)
+def larger_alternative(products, entry, need, chosen):
+    """
+    En større pakke med klart lavere pris pr. enhed end den valgte vare, eller None.
+
+    Bruges af madplanen: lønner sig, når flere af ugens retter deler pakken.
+    Returnerer (vare, pris for én pakke, pakkestørrelse i behovets enhed).
+    """
+    if need["dim"] == "pakning":
+        return None
+    chosen_unit = unit_price(chosen, need["dim"], entry)
+    chosen_priced = price_need(need, chosen, entry)
+    if not chosen_unit or not chosen_priced:
+        return None
+    best = None
+    for per_unit, basket, product, _packages in _score([p for p in products if product_matches(p, entry)], entry, need):
+        if product is chosen or per_unit is None:
+            continue
+        if per_unit <= chosen_unit * (1 - UPSIZE_MIN_UNIT_SAVING) and basket <= chosen_priced["basket"] * 2.5:
+            if best is None or per_unit < best[0]:
+                best = (per_unit, product)
+    if not best:
+        return None
+    size, _ = package_size_in(best[1], need["dim"], entry)
+    cost, bought = cost_for_packages(best[1], 1)
+    return best[1], round(cost / bought, 2), size
 
 
 def usage_cost(need, product, food_entry):

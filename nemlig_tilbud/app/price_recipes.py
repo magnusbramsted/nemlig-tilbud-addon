@@ -121,7 +121,24 @@ def is_pantry_line(text):
     return bool(words) and all(w in PANTRY_LINE_WORDS for w in words)
 
 
-def price_ingredient(ingredient, catalog, products_by_query):
+def need_key(ingredient, catalog):
+    """(katalognøgle, enhed, mængde) for en ingrediens, eller None hvis den ikke købes."""
+    food = ingredient.get("mealie_food_name")
+    if not food:
+        return None
+    entry = resolve_entry(food, catalog)
+    unit = (ingredient.get("unit") or "").strip().lower() or None
+    if entry.get("ignore") or entry.get("pantry") or entry.get("units", {}).get(unit or "", {}).get("pantry"):
+        return None
+    need, _note = pricing.resolve_need(ingredient.get("quantity"), unit, entry)
+    if need is None:
+        return None
+    if need["dim"] == "ml" and entry.get("yield_ml_per_piece"):
+        need = {"dim": "stk", "amount": need["amount"] / float(entry["yield_ml_per_piece"])}
+    return entry["_key"], need["dim"], need["amount"]
+
+
+def price_ingredient(ingredient, catalog, products_by_query, totals=None):
     food = ingredient.get("mealie_food_name")
     line = ingredient.get("name") or food or ""
     base = {"food": food, "line": line}
@@ -153,7 +170,15 @@ def price_ingredient(ingredient, catalog, products_by_query):
     if products is None:
         return {**base, "status": "mangler", "reason": "søgning fejlede", "need": pricing.format_amount(need)}
 
-    product, usage_product, candidates = pricing.choose_products(products, entry, need)
+    # Varen vælges ud fra rettens samlede behov for ingrediensen (fx 50 g + 50 g),
+    # så en større pakke kan vinde over flere små.
+    choose_need = need
+    total = (totals or {}).get((entry["_key"], need["dim"]))
+    if total and total > need["amount"]:
+        choose_need = {"dim": need["dim"], "amount": total}
+    product, usage_product, candidates = pricing.choose_products(products, entry, choose_need)
+    if product and not pricing.price_need(need, product, entry):
+        product, usage_product, candidates = pricing.choose_products(products, entry, need)
     if not product:
         return {
             **base,
@@ -187,6 +212,7 @@ def price_ingredient(ingredient, catalog, products_by_query):
         "approx": bool(priced["approx"] or note or entry.get("_auto")),
         "auto_matched": bool(entry.get("_auto")),
         "alternatives": candidates - 1,
+        "key": entry["_key"],
         "url": product.get("url"),
     }
     # Bruges til at regne fælles pakker, når samme vare optræder på flere linjer
@@ -195,6 +221,9 @@ def price_ingredient(ingredient, catalog, products_by_query):
     size = 1.0 if need["dim"] == "pakning" else pricing.package_size_in(product, need["dim"], entry)[0]
     if size:
         line["qty"] = [round(need["amount"], 3), need["dim"], round(size, 3)]
+    alt = None if entry.get("product_id") else pricing.larger_alternative(products, entry, need, product)
+    if alt and alt[2]:
+        line["alt"] = [alt[0].get("name"), alt[1], round(alt[2], 3)]
     if usage_product is not product:
         # Forbrugsprisen er regnet på en anden (større) vare med lavere kilopris.
         line["usage_product"] = usage_product.get("name")
@@ -219,8 +248,13 @@ def combined_basket(group):
 
 
 def price_recipe(recipe, catalog, products_by_query):
+    totals = {}
+    for ingredient in recipe.get("main_ingredients", []):
+        found = need_key(ingredient, catalog)
+        if found:
+            totals[found[:2]] = totals.get(found[:2], 0.0) + found[2]
     lines = [
-        price_ingredient(ingredient, catalog, products_by_query)
+        price_ingredient(ingredient, catalog, products_by_query, totals)
         for ingredient in recipe.get("main_ingredients", [])
     ]
 
@@ -304,11 +338,14 @@ def compact_line(line):
         "product": line["product"],
         "basket": line["basket"],
         "usage": line["usage"],
+        "key": line.get("key"),
     }
     if line.get("packages", 1) > 1:
         compact["packages"] = line["packages"]
     if line.get("qty"):
         compact["qty"] = line["qty"]
+    if line.get("alt"):
+        compact["alt"] = line["alt"]
     if line.get("same_package"):
         compact["same_package"] = True
     if line.get("shared_lines"):
