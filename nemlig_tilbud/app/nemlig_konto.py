@@ -158,6 +158,29 @@ def clean_items(items):
     return list(merged.values()), rejected
 
 
+_NEMLIG_ID = re.compile(r"nemlig:(\d{1,12})")
+_COUNT = re.compile(r"\s*×\s*(\d{1,2})\s*$")
+
+
+def items_from_todo(todo):
+    """Punkter fra todo.indkobsliste -> [{id, qty, name}].
+
+    Vare-id står i beskrivelsen som "nemlig:<id>" (tilbuds- og madplanvarer).
+    Antal står som " ×2" sidst i navnet. Punkter uden id afvises senere.
+    """
+    items = []
+    for entry in todo or []:
+        summary = str(entry.get("summary") or "").strip()
+        match = _NEMLIG_ID.search(str(entry.get("description") or ""))
+        count = _COUNT.search(summary)
+        items.append({
+            "id": match.group(1) if match else "",
+            "qty": int(count.group(1)) if count else 1,
+            "name": _COUNT.sub("", summary) if count else summary,
+        })
+    return items
+
+
 def add_items(driver, items):
     """Læg varer i kurven uden at fjerne noget.
 

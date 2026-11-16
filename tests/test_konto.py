@@ -103,3 +103,18 @@ def test_js_has_no_order_endpoints():
     js = nemlig_konto._API_JS.lower()
     for word in ("checkout", "placeorder", "/order/", "payment", "confirm"):
         assert word not in js
+
+
+def test_items_from_todo():
+    todo = [
+        {"summary": "Hakket oksekød 8-12% ×2", "description": "[madplan] Lasagne · 800 g · nemlig:5012345"},
+        {"summary": "Bananer", "description": "[madspild] 5,00 kr. · nemlig:701 · https://www.nemlig.com/x"},
+        {"summary": "Opvasketabs", "description": ""},
+        {"summary": "Koriander (ikke fundet hos Nemlig)", "description": "[madplan] Tacos"},
+    ]
+    items = nemlig_konto.items_from_todo(todo)
+    assert items[0] == {"id": "5012345", "qty": 2, "name": "Hakket oksekød 8-12%"}
+    assert items[1] == {"id": "701", "qty": 1, "name": "Bananer"}
+    ok, bad = nemlig_konto.clean_items(items)
+    assert [i["id"] for i in ok] == ["5012345", "701"]
+    assert [b["name"] for b in bad] == ["Opvasketabs", "Koriander (ikke fundet hos Nemlig)"]
