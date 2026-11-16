@@ -37,6 +37,11 @@ def test_summary_free_slots_and_deadlines():
     assert s["cheapest_tomorrow"]["price"] == 0
     assert [x["start"] for x in s["free_slots"]] == [
         "2026-11-17T07:00", "2026-11-17T19:00", "2026-11-18T08:00"]
+    assert s["free_days"] == [
+        {"date": "2026-11-17", "first": "2026-11-17T07:00", "last": "2026-11-17T21:00", "count": 2,
+         "deadline": "2026-11-17T12:00"},
+        {"date": "2026-11-18", "first": "2026-11-18T08:00", "last": "2026-11-18T10:00", "count": 1,
+         "deadline": "2026-11-17T23:59"}]
 
 
 def test_summary_no_free_tomorrow():

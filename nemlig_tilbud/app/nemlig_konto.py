@@ -280,7 +280,22 @@ def _public(slot):
     }
 
 
-def summarise_delivery(hours, today, max_free=21):
+def _free_days(free):
+    """Gratis tider samlet pr. dag: første start, sidste slut, antal og seneste frist."""
+    days = {}
+    for slot in free:
+        day = days.setdefault(slot["start"].date(), [])
+        day.append(slot)
+    return [{
+        "date": day.isoformat(),
+        "first": _iso(min(s["start"] for s in slots)),
+        "last": _iso(max(s["end"] for s in slots)),
+        "count": len(slots),
+        "deadline": _iso(max((s["deadline"] for s in slots if s["deadline"]), default=None)),
+    } for day, slots in sorted(days.items())]
+
+
+def summarise_delivery(hours, today, max_free=12):
     """Gratis tider og seneste bestillingsfrist for levering senest i morgen.
 
     today: dansk dato (date). Returnerer et lille dict til HA.
@@ -306,5 +321,6 @@ def summarise_delivery(hours, today, max_free=21):
         "cheapest_tomorrow": _public(cheapest) if cheapest else None,
         "deadline_tomorrow": latest_deadline(slots),
         "deadline_tomorrow_free": latest_deadline(free),
+        "free_days": _free_days(free),
         "free_slots": [_public(s) for s in free[:max_free]],
     }
