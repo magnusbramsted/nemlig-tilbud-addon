@@ -118,8 +118,35 @@ def test_items_from_todo():
         {"summary": "Koriander (ikke fundet hos Nemlig)", "description": "[madplan] Tacos"},
     ]
     items = nemlig_konto.items_from_todo(todo)
-    assert items[0] == {"id": "5012345", "qty": 2, "name": "Hakket oksekød 8-12%"}
-    assert items[1] == {"id": "701", "qty": 1, "name": "Bananer"}
+    assert items[0] == {"uid": None, "id": "5012345", "qty": 2, "name": "Hakket oksekød 8-12%"}
+    assert items[1] == {"uid": None, "id": "701", "qty": 1, "name": "Bananer"}
     ok, bad = nemlig_konto.clean_items(items)
     assert [i["id"] for i in ok] == ["5012345", "701"]
     assert [b["name"] for b in bad] == ["Opvasketabs", "Koriander (ikke fundet hos Nemlig)"]
+
+
+def test_parse_preferred():
+    assert nemlig_konto.parse_preferred("man 16-18") == (0, 16, 18)
+    assert nemlig_konto.parse_preferred("Mandag 16–18") == (0, 16, 18)
+    assert nemlig_konto.parse_preferred("søn 8-10") == (6, 8, 10)
+    assert nemlig_konto.parse_preferred("") is None
+    assert nemlig_konto.parse_preferred("nej") is None
+    assert nemlig_konto.parse_preferred("man 18-16") is None
+
+
+def test_preferred_slot_next_monday():
+    def h(day, s, e, price, avail, sid, sel=False, kind=0):
+        return {**hour(day, s, e, price, f"{day}T12:00:00", availability=avail, kind=kind), "Id": sid, "IsSelected": sel}
+    hours = [h("2026-11-23", 16, 18, 29.0, 0, 1, kind=1), h("2026-11-23", 16, 18, 0, 0, 2),
+             h("2026-11-23", 16, 19, 0, 0, 3), h("2026-11-17", 10, 11, 0, 0, 9, sel=True)]
+    # Søndag 22/11 -> mandag 23/11; gratis vindue vælges frem for 29 kr.
+    s = nemlig_konto.summarise_delivery(hours, date(2026, 11, 22), preferred=(0, 16, 18))
+    p = s["preferred"]
+    assert p["found"] and p["id"] == 2 and p["price"] == 0 and p["available"] and not p["selected"]
+    assert p["deadline_ts"].startswith("2026-11-23T12:00")
+    assert s["selected"]["start"] == "2026-11-17T10:00"
+    # Mandag i dag -> næste mandag; ingen tider endnu
+    s2 = nemlig_konto.summarise_delivery(hours, date(2026, 11, 23), preferred=(0, 16, 18))
+    assert s2["preferred"] == {"date": "2026-11-30", "found": False}
+    sold = [h("2026-11-23", 16, 18, 0, 2, 5)]
+    assert nemlig_konto.summarise_delivery(sold, date(2026, 11, 22), preferred=(0, 16, 18))["preferred"]["available"] is False
