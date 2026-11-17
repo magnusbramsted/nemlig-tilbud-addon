@@ -306,29 +306,43 @@ def parse_preferred(text):
 
 
 def preferred_slot(slots, today, preferred):
-    """Den foretrukne tid på næste foretrukne ugedag efter i dag.
+    """Gratis tid på næste foretrukne ugedag, der ligger HELT inden for vinduet.
 
-    Flere tider med samme vindue (Personlig/Fleksibel): ledig før optaget, så gratis,
-    så billigst. Returnerer også optagne tider, så HA kan vise "udsolgt".
+    preferred = (ugedag, fra, til), fx (1, 15, 18) = tirsdag 15-18: 15-17, 15-18,
+    16-18 og 17-18 passer; 14-17 og 16-19 gør ikke. Kun ledige gratis tider vælges;
+    flere -> det korteste vindue (mest præcist), så det tidligste. Findes ingen,
+    returneres found=False med de nærmeste gratis alternativer samme dag (tider der
+    overlapper vinduet) og den billigste betalte tid inden for vinduet.
     """
     if not preferred:
         return None
     weekday, start, end = preferred
     days_ahead = (weekday - today.weekday()) % 7 or 7
     day = today + timedelta(days=days_ahead)
-    matches = [s for s in slots if s["start"].date() == day
-               and s["start"].hour == start and s["end"].hour == end and s["end"].date() == day]
-    if not matches:
-        return {"date": day.isoformat(), "found": False}
-    best = min(matches, key=lambda s: (not s["available"], s["price"] != 0, s["price"] or 0))
+    same_day = [s for s in slots if s["start"].date() == day and s["end"].date() == day]
+    inside = [s for s in same_day if s["start"].hour >= start and s["end"].hour <= end
+              and (s["end"].hour < end or s["end"].minute == 0)]
+    free = [s for s in inside if s["available"] and s["price"] == 0]
+    info = {"date": day.isoformat(), "window": f"{start}-{end}"}
+    if not free:
+        overlap = sorted((s for s in same_day if s["available"] and s["price"] == 0
+                          and s not in inside and s["start"].hour < end and s["end"].hour > start),
+                         key=lambda s: (s["start"], s["end"]))
+        paid = [s for s in inside if s["available"] and s["price"]]
+        cheapest = min(paid, key=lambda s: (s["price"], s["start"])) if paid else None
+        return {**info, "found": False,
+                "alternatives": [f"{s['start'].hour}-{s['end'].hour}" for s in overlap[:5]],
+                "paid": _public(cheapest) if cheapest else None,
+                "opened": bool(same_day)}
+    best = min(free, key=lambda s: (s["end"] - s["start"], s["start"]))
     deadline = best["deadline"]
     return {
         **_public(best),
-        "date": day.isoformat(),
+        **info,
         "found": True,
         "id": best["id"],
-        "available": best["available"],
-        "selected": any(s["selected"] for s in matches),
+        "available": True,
+        "selected": best["selected"],
         # Med tidszone, så HA kan regne på fristen (containeren kører i HA's tidszone).
         "deadline_ts": deadline.astimezone().isoformat(timespec="minutes") if deadline else None,
     }
