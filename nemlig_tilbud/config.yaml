@@ -1,5 +1,5 @@
 name: "Nemlig tilbudshenter"
-version: "0.6.1"
+version: "0.7.0"
 slug: "nemlig_tilbud"
 description: "Prissætter dine Mealie-retter med Nemligs aktuelle priser (inkl. prismatch med REMA 1000), samler tilbud, gratis, madspild og store rabatter, lægger indkøbslisten i Nemlig-kurven og viser gratis leveringstider."
 url: "https://github.com/magnusbramsted/nemlig-tilbud-addon"
@@ -17,7 +17,7 @@ options:
   high_discount_threshold_percent: 50
   nemlig_email: ""
   nemlig_password: ""
-  preferred_delivery: "man 16-18"
+  preferred_delivery: "tir 15-18"
 schema:
   update_interval_hours: int(1,168)
   mealie_api_token: password
