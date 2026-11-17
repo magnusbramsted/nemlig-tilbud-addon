@@ -34,7 +34,7 @@ MAX_BODY = 64 * 1024
 TODO_ENTITY = "todo.indkobsliste"
 KURV_SENSOR = "sensor.nemlig_kurv"
 LEVERING_SENSOR = "sensor.nemlig_levering"
-DEFAULT_PREFERRED = "man 16-18"
+DEFAULT_PREFERRED = "tir 15-18"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -180,13 +180,13 @@ def _fill_basket(driver, items, preferred):
         summary = _delivery_summary(driver, preferred)
         pref = summary.get("preferred") or {}
         if not pref.get("found"):
-            slot = {"status": "findes ikke", "date": pref.get("date")}
+            # Ingen gratis tid inden for vinduet: vælg ingenting, HA giver besked.
+            slot = {"status": "ingen gratis tid", "date": pref.get("date"), "window": pref.get("window"),
+                    "alternatives": pref.get("alternatives"), "paid": pref.get("paid")}
         else:
             shown, text = _basket_shows(driver, pref)
             if pref.get("selected") or shown:
                 slot = {**pref, "status": "allerede valgt", "basket_delivery": text}
-            elif not pref.get("available"):
-                slot = {**pref, "status": "ikke ledig", "basket_delivery": text}
             else:
                 nemlig_konto.select_slot(driver, pref["id"])
                 shown, text = _basket_shows(driver, pref)

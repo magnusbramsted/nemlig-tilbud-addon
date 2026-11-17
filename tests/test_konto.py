@@ -134,19 +134,27 @@ def test_parse_preferred():
     assert nemlig_konto.parse_preferred("man 18-16") is None
 
 
-def test_preferred_slot_next_monday():
+def test_preferred_slot_tuesday_inside_window():
     def h(day, s, e, price, avail, sid, sel=False, kind=0):
-        return {**hour(day, s, e, price, f"{day}T12:00:00", availability=avail, kind=kind), "Id": sid, "IsSelected": sel}
-    hours = [h("2026-11-23", 16, 18, 29.0, 0, 1, kind=1), h("2026-11-23", 16, 18, 0, 0, 2),
-             h("2026-11-23", 16, 19, 0, 0, 3), h("2026-11-17", 10, 11, 0, 0, 9, sel=True)]
-    # Søndag 22/11 -> mandag 23/11; gratis vindue vælges frem for 29 kr.
-    s = nemlig_konto.summarise_delivery(hours, date(2026, 11, 22), preferred=(0, 16, 18))
+        return {**hour(day, s, e, price, f"{day}T00:00:00", availability=avail, kind=kind), "Id": sid, "IsSelected": sel}
+    hours = [h("2026-11-24", 14, 17, 0, 0, 1), h("2026-11-24", 16, 19, 0, 0, 2), h("2026-11-24", 15, 18, 0, 0, 3),
+             h("2026-11-24", 16, 18, 0, 0, 4), h("2026-11-24", 16, 18, 29.0, 0, 5, kind=1), h("2026-11-24", 17, 18, 0, 2, 6)]
+    # Søndag 22/11 -> tirsdag 24/11. 16-18 gratis (kortest af 15-18 og 16-18); 17-18 er udsolgt.
+    s = nemlig_konto.summarise_delivery(hours, date(2026, 11, 22), preferred=(1, 15, 18))
     p = s["preferred"]
-    assert p["found"] and p["id"] == 2 and p["price"] == 0 and p["available"] and not p["selected"]
-    assert p["deadline_ts"].startswith("2026-11-23T12:00")
-    assert s["selected"]["start"] == "2026-11-17T10:00"
-    # Mandag i dag -> næste mandag; ingen tider endnu
-    s2 = nemlig_konto.summarise_delivery(hours, date(2026, 11, 23), preferred=(0, 16, 18))
-    assert s2["preferred"] == {"date": "2026-11-30", "found": False}
-    sold = [h("2026-11-23", 16, 18, 0, 2, 5)]
-    assert nemlig_konto.summarise_delivery(sold, date(2026, 11, 22), preferred=(0, 16, 18))["preferred"]["available"] is False
+    assert p["found"] and p["id"] == 4 and p["price"] == 0 and p["start"] == "2026-11-24T16:00"
+    assert p["deadline_ts"].startswith("2026-11-24T00:00")
+    # Mandag 23/11 -> også tirsdag 24/11
+    assert nemlig_konto.summarise_delivery(hours, date(2026, 11, 23), preferred=(1, 15, 18))["preferred"]["date"] == "2026-11-24"
+
+
+def test_preferred_slot_none_free_inside():
+    def h(s, e, price, sid):
+        return {**hour("2026-11-24", s, e, price, "2026-11-24T00:00:00"), "Id": sid}
+    hours = [h(14, 17, 0, 1), h(15, 20, 0, 2), h(16, 19, 0, 3), h(16, 18, 36.0, 4), h(19, 22, 0, 5)]
+    p = nemlig_konto.summarise_delivery(hours, date(2026, 11, 22), preferred=(1, 15, 18))["preferred"]
+    assert p["found"] is False and p["opened"] is True
+    assert p["alternatives"] == ["14-17", "15-20", "16-19"]
+    assert p["paid"]["price"] == 36.0
+    empty = nemlig_konto.summarise_delivery([], date(2026, 11, 22), preferred=(1, 15, 18))["preferred"]
+    assert empty == {"date": "2026-11-24", "window": "15-18", "found": False, "alternatives": [], "paid": None, "opened": False}
